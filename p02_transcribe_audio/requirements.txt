@@ -1,0 +1,4 @@
+pyTelegramBotAPI 
+git+https://github.com/openai/whisper.git 
+openai 
+replicate

@@ -1,0 +1,6 @@
+.env
+*.session
+*.session-journal
+downloads
+*pyc
+.DS_Store
