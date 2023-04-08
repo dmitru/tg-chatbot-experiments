@@ -4,7 +4,9 @@ import re
 import subprocess
 import time
 import traceback
+import asyncio
 import telebot
+import math
 import openai
 import replicate
 from pyrogram import Client
@@ -39,29 +41,116 @@ app = Client(
 )
 
 
-def transcribe_replica(file_path):
-    inputs = {
-        "audio": open(file_path, "rb"),
-        "model": REPLICATE_MODEL_NAME,
-    }
-
+async def transcribe_replica(file_path):
     result = {}
     for q in range(2):
         try:
-            result = replicate_model_version.predict(**inputs)
+            input = {
+                "audio": open(file_path, "rb"),
+                "model": REPLICATE_MODEL_NAME,
+            }
+            prediction = replicate.predictions.create(
+                version=replicate_model_version, input=input
+            )
+
+            # wait until prediciton is ready
+            await asyncio.sleep(2)
+            print("Prediction status: ", prediction.status)
+            while True:
+                if prediction.status == "succeeded":
+                    break
+                if prediction.status == "failed":
+                    break
+                await asyncio.sleep(4)
+                print("Prediction status: ", prediction.status)
+                prediction = replicate.predictions.get(prediction.id)
         except Exception as e:
             traceback.print_exc(e)
-            time.sleep(2)
+            await asyncio.sleep(2)
         if result:
             break
 
-    print("Hey 1")
-    audio_transcription = result.get("transcription", "")
-    print("Hey 2")
-    audio_transcription = clean(audio_transcription)
-    print("Hey 3")
+    print("Output: ", prediction.output)
+    outp = prediction.output
+    if outp is None:
+        return "(none)"
+    transcription = outp.get("transcription", "")
+    return transcription
 
-    return audio_transcription
+
+def convert_to_mono_mp3(
+    source_filename, result_filename, bitrate=40, sample_rate=16000
+):
+    # Run ffmpeg command to convert audio file to mono MP3
+    cmd = [
+        "ffmpeg",
+        "-i",
+        source_filename,
+        "-ac",
+        "1",
+        "-ar",
+        str(sample_rate),
+        "-ab",
+        str(bitrate) + "k",
+        "-f",
+        "mp3",
+        "-y",
+        result_filename,
+    ]
+    subprocess.run(cmd, check=True)
+
+    return result_filename
+
+
+def split_mp3_by_length(input_file, max_length):
+    # Get input file duration using ffprobe
+    duration_cmd = [
+        "ffprobe",
+        "-i",
+        input_file,
+        "-show_entries",
+        "format=duration",
+        "-v",
+        "quiet",
+        "-of",
+        "csv=p=0",
+    ]
+    result = subprocess.run(duration_cmd, stdout=subprocess.PIPE)
+    duration = float(result.stdout)
+
+    # Calculate number of output files needed
+    num_output_files = math.ceil(duration / max_length)
+
+    output_paths = []
+    # Split input file into multiple output files of max length
+    for i in range(num_output_files):
+        # Set output file name with index and mp3 extension
+        output_file = f"{os.path.splitext(input_file)[0]}_{i+1}.mp3"
+
+        # Calculate start and end positions for current chunk
+        start_time = i * max_length
+        end_time = min((i + 1) * max_length, duration)
+        duration_time = end_time - start_time
+
+        output_paths.append(output_file)
+
+        # Run ffmpeg command to extract chunk of input file to output file
+        cmd = [
+            "ffmpeg",
+            "-i",
+            input_file,
+            "-ss",
+            str(start_time),
+            "-t",
+            str(duration_time),
+            "-c",
+            "copy",
+            "-y",
+            output_file,
+        ]
+        subprocess.run(cmd, check=True)
+
+    return output_paths
 
 
 # A function to open an audio file and split it into chunks of 30 seconds
@@ -73,6 +162,7 @@ def split_audio_file(file_path, chunk_max_len_seconds=60):
         return []
 
     # Split the audio file into chunks of chunk_max_len_seconds seconds
+
     parts = []
     for i in range(int(duration / chunk_max_len_seconds)):
         part_file_path = f"{file_path}_{i}.mp3"

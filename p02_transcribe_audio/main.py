@@ -2,6 +2,8 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+import argparse
+
 import datetime
 import os
 import subprocess
@@ -27,16 +29,34 @@ api_hash = os.environ.get("TELEGRAM_APP_HASH")
 bot = TelegramClient("anon", api_id, api_hash).start(bot_token=BOT_TOKEN)
 
 
-def convert_media_to_ogg_audio(src_path, dest_path):
-    command = [
-        "ffmpeg",
-        "-i",
-        src_path,
-        "-vn",
-        "-c:a",
-        "libvorbis",
-        dest_path,
-    ]
+def convert_media_to_ogg_audio(src_path, dest_path, format="ogg"):
+    # convert media file to mp4 with ffmpeg
+    command = []
+    if format == "ogg":
+        command = [
+            "ffmpeg",
+            "-i",
+            src_path,
+            "-vn",
+            "-c:a",
+            "libvorbis",
+            dest_path,
+        ]
+    elif format == "mp3":
+        command = [
+            "ffmpeg",
+            "-i",
+            src_path,
+            "-vn",
+            "-acodec",
+            "libmp3lame",
+            "-ac",
+            "1",
+            "-ar",
+            "16000",
+            dest_path,
+        ]
+
     result = subprocess.run(command, capture_output=True)
 
     if result.returncode != 0:
@@ -77,7 +97,7 @@ async def echo(event: events.NewMessage.Event):
         )
 
     filepath_media = "downloads/{0}_{1}".format(msg.file.id, msg.file.ext)
-    filepath_audio = os.path.splitext(filepath_media)[0] + ".ogg"
+    filepath_audio = os.path.splitext(filepath_media)[0] + "_processed_" + ".mp3"
 
     print("Processing path", filepath_media)
 
@@ -95,15 +115,25 @@ async def echo(event: events.NewMessage.Event):
 
     await download_file()
 
-    print("Done downloading, processing audio", filepath_media)
-    if not os.path.isfile(filepath_audio):
-        convert_media_to_ogg_audio(filepath_media, filepath_audio)
+    print("Done downloading, processing audio", filepath_media, filepath_audio)
+    # if not os.path.isfile(filepath_audio):
+    # convert_media_to_ogg_audio(filepath_media, filepath_audio, format="mp3")
+    convert_to_mono_mp3(filepath_media, filepath_audio)
 
-    print("done")
+    chunks = split_mp3_by_length(filepath_audio, 30)
+    print("Chunks", chunks)
+    # for chunk in [chunks[0]]:
+    #     print("Chunk file = ", chunk)
+    #     # TODO: use the audio file to transcribe the speech
+    print("Start transcribing...")
+    transcription = await transcribe_replica(filepath_audio)
+    print("Transcription is done: ", transcription)
 
-    print("done processing all attachments")
-    """Echo the user message."""
-    await event.respond("Done processing")
+    # split the transcription into chunks max 4000 characters
+    transcription_chunks = make_short_parts(transcription, 4000)
+    for chunk in transcription_chunks:
+        print("Sending chunk...", chunk)
+        await event.respond(chunk)
 
 
 def main():
