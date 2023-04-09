@@ -45,6 +45,8 @@ bot = TelegramClient("anon", TG_API_ID, TG_API_HASH).start(bot_token=TG_BOT_TOKE
 async def on_message(event: events.NewMessage.Event):
     try:
         log_data = await process_new_message_event(event)
+        if log_data is None:
+            return
         print("Logging data", log_data)
         append_row_to_sheet(sheet_transcribe_jobs, list(log_data.values()))
     except Exception as error:
