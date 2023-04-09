@@ -1,4 +1,5 @@
 import datetime
+import json
 import os
 import re
 import subprocess
@@ -21,8 +22,8 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-BOT_TOKEN = os.environ.get("BOT_TOKEN")
-bot = AsyncTeleBot(BOT_TOKEN)
+TG_BOT_TOKEN = os.environ.get("BOT_TOKEN")
+bot = AsyncTeleBot(TG_BOT_TOKEN)
 
 REPLICATE_MODEL_NAME = "large-v2"
 
@@ -37,45 +38,42 @@ app = Client(
     "speech2text_bot",
     api_id=os.environ.get("TELEGRAM_APP_ID"),
     api_hash=os.environ.get("TELEGRAM_APP_HASH"),
-    bot_token=BOT_TOKEN,
+    bot_token=TG_BOT_TOKEN,
 )
 
 
 async def transcribe_replica(file_path):
     result = {}
-    for q in range(2):
-        try:
-            input = {
-                "audio": open(file_path, "rb"),
-                "model": REPLICATE_MODEL_NAME,
-            }
-            prediction = replicate.predictions.create(
-                version=replicate_model_version, input=input
-            )
+    # for q in range(2):
+    try:
+        input = {
+            "audio": open(file_path, "rb"),
+            "model": REPLICATE_MODEL_NAME,
+        }
+        prediction = replicate.predictions.create(
+            version=replicate_model_version, input=input
+        )
 
-            # wait until prediciton is ready
-            await asyncio.sleep(2)
+        # wait until prediciton is ready
+        await asyncio.sleep(2)
+        print("Prediction status: ", prediction.status)
+        while True:
+            if prediction.status == "succeeded":
+                break
+            if prediction.status == "failed":
+                break
+            await asyncio.sleep(4)
             print("Prediction status: ", prediction.status)
-            while True:
-                if prediction.status == "succeeded":
-                    break
-                if prediction.status == "failed":
-                    break
-                await asyncio.sleep(4)
-                print("Prediction status: ", prediction.status)
-                prediction = replicate.predictions.get(prediction.id)
-        except Exception as e:
-            traceback.print_exc(e)
-            await asyncio.sleep(2)
-        if result:
-            break
+            prediction = replicate.predictions.get(prediction.id)
+    except Exception as e:
+        traceback.print_exc(e)
+        await asyncio.sleep(2)
 
     print("Output: ", prediction.output)
     outp = prediction.output
     if outp is None:
         return "(none)"
-    transcription = outp.get("transcription", "")
-    return transcription
+    return outp
 
 
 def convert_to_mono_mp3(
@@ -93,7 +91,7 @@ def convert_to_mono_mp3(
         "-ab",
         str(bitrate) + "k",
         "-f",
-        "mp3",
+        "ogg",
         "-y",
         result_filename,
     ]
@@ -102,12 +100,12 @@ def convert_to_mono_mp3(
     return result_filename
 
 
-def split_mp3_by_length(input_file, max_length):
+def get_media_duration(file_path):
     # Get input file duration using ffprobe
     duration_cmd = [
         "ffprobe",
         "-i",
-        input_file,
+        file_path,
         "-show_entries",
         "format=duration",
         "-v",
@@ -117,6 +115,11 @@ def split_mp3_by_length(input_file, max_length):
     ]
     result = subprocess.run(duration_cmd, stdout=subprocess.PIPE)
     duration = float(result.stdout)
+    return duration
+
+
+def split_mp3_by_length(input_file, max_length):
+    duration = get_media_duration(input_file)
 
     # Calculate number of output files needed
     num_output_files = math.ceil(duration / max_length)
@@ -315,3 +318,13 @@ def make_short_parts(text, max_length):
             short_parts.append(clean(text_to_add))
 
     return short_parts
+
+
+def write_json_to_file_utf8(filepath, data):
+    with open(filepath, "w", encoding="utf-8") as f:
+        f.write(json.dumps(data, ensure_ascii=False))
+
+
+def read_json_from_filt_utf8(filepath):
+    with open(filepath, "r", encoding="utf-8") as f:
+        return json.load(f)

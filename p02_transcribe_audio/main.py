@@ -1,74 +1,52 @@
+"""
+Launches the bot.
+"""
+
+import json
 from dotenv import load_dotenv
 
 load_dotenv()
 
-import argparse
-
-import datetime
 import os
-import subprocess
-import time
-import traceback
+
+import gspread
+
+gc = gspread.service_account(filename="google_service_key.json")
+sheet_url = os.environ.get("GSPREAD_SHEET_URL")
+sheet = gc.open_by_url(sheet_url)
+sheet_transcribe_jobs = sheet.worksheet("transcribe_jobs")
+
+
+def append_row_to_sheet(worksheet: gspread.Worksheet, row_data):
+    rows_count = len(worksheet.get_all_values())
+    worksheet.append_row(
+        row_data, table_range="%d:%d" % (rows_count + 1, len(row_data))
+    )
+
+    return rows_count
+
 
 from utils.utils import *
-from telebot.async_telebot import AsyncTeleBot
-import telebot
-import openai
-import replicate
 from datetime import datetime, timezone
 from pyrogram import Client, filters
 from telethon import TelegramClient, events, sync, tl, utils
 
-BOT_TOKEN = os.environ.get("BOT_TOKEN")
-bot = AsyncTeleBot(BOT_TOKEN)
+TG_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
+TG_API_ID = os.environ.get("TELEGRAM_APP_ID")
+TG_API_HASH = os.environ.get("TELEGRAM_APP_HASH")
 
-api_id = os.environ.get("TELEGRAM_APP_ID")
-api_hash = os.environ.get("TELEGRAM_APP_HASH")
+MAX_FILE_SIZE = 50 * 1024 * 1024  # 250 MB
 
 # Remember to use your own values from my.telegram.org!
-bot = TelegramClient("anon", api_id, api_hash).start(bot_token=BOT_TOKEN)
-
-
-def convert_media_to_ogg_audio(src_path, dest_path, format="ogg"):
-    # convert media file to mp4 with ffmpeg
-    command = []
-    if format == "ogg":
-        command = [
-            "ffmpeg",
-            "-i",
-            src_path,
-            "-vn",
-            "-c:a",
-            "libvorbis",
-            dest_path,
-        ]
-    elif format == "mp3":
-        command = [
-            "ffmpeg",
-            "-i",
-            src_path,
-            "-vn",
-            "-acodec",
-            "libmp3lame",
-            "-ac",
-            "1",
-            "-ar",
-            "16000",
-            dest_path,
-        ]
-
-    result = subprocess.run(command, capture_output=True)
-
-    if result.returncode != 0:
-        print(f"Error: failed to extract audio from {src_path}")
-    else:
-        print(f"Successfully extracted audio from {src_path} and saved as {dest_path}")
+bot = TelegramClient("anon", TG_API_ID, TG_API_HASH).start(bot_token=TG_BOT_TOKEN)
 
 
 @bot.on(events.NewMessage)
-async def echo(event: events.NewMessage.Event):
+async def on_message(event: events.NewMessage.Event):
     print(event.text)
     msg: tl.patched.Message = event.message
+
+    t_start = time.time()
 
     things_to_process = []
     if msg.voice is not None:
@@ -83,7 +61,7 @@ async def echo(event: events.NewMessage.Event):
     if len(things_to_process) == 0:
         print("no file to process")
         await event.respond(
-            "Please send me a voice, a video message or an audio file with speech recording"
+            "Please send me a voice, a video or an audio file with speech recording"
         )
         return
 
@@ -96,8 +74,12 @@ async def echo(event: events.NewMessage.Event):
             "bytes: {:.2%}".format(current / total),
         )
 
+    if msg.file.size > MAX_FILE_SIZE:
+        await event.respond("File is too large, please send a file smaller than 250 MB")
+        return
+
     filepath_media = "downloads/{0}_{1}".format(msg.file.id, msg.file.ext)
-    filepath_audio = os.path.splitext(filepath_media)[0] + "_processed_" + ".mp3"
+    filepath_audio = os.path.splitext(filepath_media)[0] + "_processed_" + ".ogg"
 
     print("Processing path", filepath_media)
 
@@ -115,25 +97,79 @@ async def echo(event: events.NewMessage.Event):
 
     await download_file()
 
-    print("Done downloading, processing audio", filepath_media, filepath_audio)
-    # if not os.path.isfile(filepath_audio):
-    # convert_media_to_ogg_audio(filepath_media, filepath_audio, format="mp3")
-    convert_to_mono_mp3(filepath_media, filepath_audio)
+    t_after_download = time.time()
 
-    chunks = split_mp3_by_length(filepath_audio, 30)
-    print("Chunks", chunks)
-    # for chunk in [chunks[0]]:
-    #     print("Chunk file = ", chunk)
-    #     # TODO: use the audio file to transcribe the speech
-    print("Start transcribing...")
-    transcription = await transcribe_replica(filepath_audio)
+    print("Done downloading, processing audio", filepath_media, filepath_audio)
+    if not os.path.isfile(filepath_audio):
+        convert_to_mono_mp3(filepath_media, filepath_audio)
+
+    t_after_conversion = time.time()
+
+    # Read json from a file as dict
+    trans_cache_file = filepath_audio + ".trans.json"
+    trans_cache_hit = False
+    if os.path.isfile(trans_cache_file):
+        print("Transcription: reading from cache...")
+        trans_result = read_json_from_filt_utf8(trans_cache_file)
+        trans_cache_hit = True
+    else:
+        print("Transcription: starting...")
+        trans_result = await transcribe_replica(filepath_audio)
+        trans_cache_hit = False
+
+    transcription = trans_result.get("transcription", "")
+    detected_language = trans_result.get("detected_language", "")
+
+    # Cache the transcription result...
+    trans_cache_data = {
+        "date": datetime.now(timezone.utc).isoformat(),
+        "transcription": transcription,
+        "detected_language": detected_language,
+    }
+
+    write_json_to_file_utf8(trans_cache_file, trans_cache_data)
+
     print("Transcription is done: ", transcription)
+
+    t_after_transcription = time.time()
+
+    media_duration = get_media_duration(filepath_audio)
+    # Remove the audio file
+    os.remove(filepath_audio)
 
     # split the transcription into chunks max 4000 characters
     transcription_chunks = make_short_parts(transcription, 4000)
     for chunk in transcription_chunks:
         print("Sending chunk...", chunk)
         await event.respond(chunk)
+
+    t_end = time.time()
+
+    log_data = {
+        "date": datetime.now(timezone.utc).isoformat(),
+        # Message, etc
+        "chat_id": msg.chat.id,
+        "file_id": msg.file.id,
+        "file_size": msg.file.size,
+        "file_name": msg.file.name,
+        "file_ext": msg.file.ext,
+        "file_duration": media_duration,
+        # Transcription
+        "trans_cache_hit": str(trans_cache_hit),
+        "trans_chunks": len(transcription_chunks),
+        "trans_len": len(transcription),
+        "trans_detected_language": detected_language,
+        "trans_transcription": transcription[:1000],
+        # Timing
+        "time_download": t_after_download - t_start,
+        "time_conversion": t_after_conversion - t_after_download,
+        "time_transcription": t_after_transcription - t_after_conversion,
+        "time_sending": t_end - t_after_transcription,
+        "time_total": t_end - t_start,
+    }
+
+    print("Logging data", log_data)
+    append_row_to_sheet(sheet_transcribe_jobs, list(log_data.values()))
 
 
 def main():

@@ -1,3 +1,7 @@
+"""
+Converts a media file to Ogg audio using ffmpeg.
+"""
+
 import argparse
 import os
 import subprocess
