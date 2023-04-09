@@ -43,6 +43,26 @@ bot = TelegramClient("anon", TG_API_ID, TG_API_HASH).start(bot_token=TG_BOT_TOKE
 
 @bot.on(events.NewMessage)
 async def on_message(event: events.NewMessage.Event):
+    try:
+        log_data = await process_new_message_event(event)
+        print("Logging data", log_data)
+        append_row_to_sheet(sheet_transcribe_jobs, list(log_data.values()))
+    except Exception as error:
+        log_data = {
+            "date": datetime.now(timezone.utc).isoformat(),
+            "error": True,
+            "error_msg": str(error),
+            "chat_id": event.message.chat.id,
+        }
+        try:
+            append_row_to_sheet(sheet_transcribe_jobs, list(log_data.values()))
+        except Exception as error:
+            print("Error logging error", error)
+
+        await event.respond("Sorry, there was an error processing your audio file.")
+
+
+async def process_new_message_event(event: events.NewMessage.Event):
     print(event.text)
     msg: tl.patched.Message = event.message
 
@@ -147,6 +167,8 @@ async def on_message(event: events.NewMessage.Event):
 
     log_data = {
         "date": datetime.now(timezone.utc).isoformat(),
+        "error": False,
+        "error_msg": "",
         # Message, etc
         "chat_id": msg.chat.id,
         "file_id": msg.file.id,
@@ -166,10 +188,10 @@ async def on_message(event: events.NewMessage.Event):
         "time_transcription": t_after_transcription - t_after_conversion,
         "time_sending": t_end - t_after_transcription,
         "time_total": t_end - t_start,
+        "time_ratio": media_duration / (t_end - t_start),
     }
 
-    print("Logging data", log_data)
-    append_row_to_sheet(sheet_transcribe_jobs, list(log_data.values()))
+    return log_data
 
 
 def main():
