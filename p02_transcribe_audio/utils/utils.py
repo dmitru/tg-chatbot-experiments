@@ -8,7 +8,6 @@ import traceback
 import asyncio
 import telebot
 import math
-import openai
 import replicate
 from pyrogram import Client
 from datetime import datetime, timezone
@@ -32,7 +31,7 @@ replicate_model = replicate.models.get("openai/whisper")
 replicate_model_version = replicate_model.versions.get(
     "e39e354773466b955265e969568deb7da217804d8e771ea8c9cd0cef6591f8bc"
 )
-openai.api_key = os.environ.get("OPENAI_API_KEY")
+# openai.api_key = os.environ.get("OPENAI_API_KEY")
 
 app = Client(
     "speech2text_bot",

@@ -19,8 +19,6 @@ more-itertools==9.1.0
 multidict==6.0.4
 networkx==3.0
 oauthlib==3.2.2
-openai==0.27.2
-openai-whisper @ git+https://github.com/openai/whisper.git@b5851c6c40e753606765ac45b85b298e3ae9e00d
 packaging==23.0
 pip-check-reqs==2.4.4
 pyaes==1.6.1
