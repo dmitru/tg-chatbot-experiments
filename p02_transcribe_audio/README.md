@@ -9,3 +9,7 @@ Telegram chatbot for speech-to-text conversion using Whisper model running on Re
 3. Create a venv, Python 3.10, activate it: `source .venv/bin/activate`
 4. Install packages: `pip install -r requirements.txt`
 5. Run it! `python ./main.py`
+
+# Deployment
+
+As of 2023-07-24 it's deployed to a Digitalocean droplet.

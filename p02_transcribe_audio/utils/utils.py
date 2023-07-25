@@ -22,7 +22,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-TG_BOT_TOKEN = os.environ.get("BOT_TOKEN")
+TG_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 bot = AsyncTeleBot(TG_BOT_TOKEN)
 
 REPLICATE_MODEL_NAME = "large-v2"
